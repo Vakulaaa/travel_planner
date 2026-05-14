@@ -1,0 +1,12 @@
+.git
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.sqlite3
+.coverage
+htmlcov
+.idea
+.vscode
+.DS_Store
