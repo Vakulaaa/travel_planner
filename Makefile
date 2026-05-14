@@ -6,7 +6,7 @@ makemigrations:
 migrate:
 	.venv/bin/python manage.py migrate
 
-runserver:
+run:
 	.venv/bin/python manage.py runserver
 
 test:
