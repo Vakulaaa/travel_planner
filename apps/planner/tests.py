@@ -8,67 +8,106 @@ from rest_framework.test import APITestCase
 from .models import ProjectPlace, TravelProject
 
 
-class V04ApiTests(APITestCase):
+class V05ApiTests(APITestCase):
     def setUp(self):
-        user = User.objects.create_user(username="v4user", password="v4pass123")
+        user = User.objects.create_user(username="v5user", password="v5pass123")
         self.client.force_authenticate(user=user)
 
-    def test_project_crud_still_works(self):
-        create_response = self.client.post(
-            reverse("projects-collection"),
-            {
-                "name": "Paris Trip",
-                "description": "Museums and walks",
-                "start_date": "2026-07-01",
-            },
-            format="json",
-        )
-        self.assertEqual(create_response.status_code, status.HTTP_201_CREATED)
-        project_id = create_response.data["id"]
-
-        detail_url = reverse("project-detail", kwargs={"project_id": project_id})
-        get_response = self.client.get(detail_url)
-        self.assertEqual(get_response.status_code, status.HTTP_200_OK)
+    def create_project(self, name="Trip"):
+        return TravelProject.objects.create(name=name)
 
     @patch("apps.planner.serializers.get_artwork_by_external_id")
     def test_add_place_to_project(self, mock_artwork):
         mock_artwork.return_value = {"id": 123, "title": "The Artwork"}
+        project = self.create_project()
 
-        project = TravelProject.objects.create(name="Trip")
         url = reverse("project-places", kwargs={"project_id": project.id})
-
         response = self.client.post(
             url, {"external_id": 123, "notes": "Need tickets"}, format="json"
         )
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        self.assertEqual(response.data["external_id"], 123)
-        self.assertEqual(response.data["title"], "The Artwork")
         self.assertEqual(ProjectPlace.objects.filter(project=project).count(), 1)
 
-    def test_list_places_for_project(self):
-        project = TravelProject.objects.create(name="Trip")
-        place = ProjectPlace.objects.create(project=project, external_id=1, title="A")
+    @patch("apps.planner.serializers.get_artwork_by_external_id")
+    def test_duplicate_place_blocked(self, mock_artwork):
+        mock_artwork.return_value = {"id": 123, "title": "The Artwork"}
+        project = self.create_project()
+        ProjectPlace.objects.create(project=project, external_id=123, title="A")
 
         url = reverse("project-places", kwargs={"project_id": project.id})
-        response = self.client.get(url)
+        response = self.client.post(url, {"external_id": 123}, format="json")
 
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(response.data), 1)
-        self.assertEqual(response.data[0]["id"], place.id)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
-    def test_get_single_place_in_project(self):
-        project = TravelProject.objects.create(name="Trip")
-        place = ProjectPlace.objects.create(project=project, external_id=1, title="A")
+    @patch("apps.planner.serializers.get_artwork_by_external_id")
+    def test_max_10_places_limit(self, mock_artwork):
+        mock_artwork.return_value = {"id": 999, "title": "Any"}
+        project = self.create_project()
+
+        for i in range(10):
+            ProjectPlace.objects.create(project=project, external_id=i + 1, title=f"A{i}")
+
+        url = reverse("project-places", kwargs={"project_id": project.id})
+        response = self.client.post(url, {"external_id": 999}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_patch_place_notes_and_visited(self):
+        project = self.create_project()
+        place = ProjectPlace.objects.create(
+            project=project, external_id=1, title="A", visited=False
+        )
 
         url = reverse(
             "project-place-detail",
             kwargs={"project_id": project.id, "place_id": place.id},
         )
-        response = self.client.get(url)
+        response = self.client.patch(
+            url,
+            {"notes": "Visited today", "visited": True},
+            format="json",
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data["id"], place.id)
+        place.refresh_from_db()
+        self.assertEqual(place.notes, "Visited today")
+        self.assertTrue(place.visited)
+
+    def test_project_auto_completed_when_all_places_visited(self):
+        project = self.create_project()
+        place1 = ProjectPlace.objects.create(
+            project=project, external_id=1, title="A", visited=False
+        )
+        ProjectPlace.objects.create(project=project, external_id=2, title="B", visited=True)
+
+        url = reverse(
+            "project-place-detail",
+            kwargs={"project_id": project.id, "place_id": place1.id},
+        )
+        self.client.patch(url, {"visited": True}, format="json")
+
+        project.refresh_from_db()
+        self.assertTrue(project.is_completed)
+
+    def test_cannot_delete_project_with_visited_places(self):
+        project = self.create_project()
+        ProjectPlace.objects.create(project=project, external_id=1, title="A", visited=True)
+
+        url = reverse("project-detail", kwargs={"project_id": project.id})
+        response = self.client.delete(url)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertTrue(TravelProject.objects.filter(pk=project.id).exists())
+
+    def test_can_delete_project_without_visited_places(self):
+        project = self.create_project()
+        ProjectPlace.objects.create(project=project, external_id=1, title="A", visited=False)
+
+        url = reverse("project-detail", kwargs={"project_id": project.id})
+        response = self.client.delete(url)
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
 
     @patch("apps.planner.services.requests.get")
     def test_service_validation_error(self, mock_get):

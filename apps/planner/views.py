@@ -4,7 +4,20 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from .models import ProjectPlace, TravelProject
-from .serializers import AddPlaceSerializer, ProjectPlaceSerializer, TravelProjectSerializer
+from .serializers import (
+    AddPlaceSerializer,
+    ProjectPlaceSerializer,
+    ProjectPlaceUpdateSerializer,
+    TravelProjectSerializer,
+)
+
+
+def recalculate_project_completion(project):
+    total_places = project.places.count()
+    all_visited = total_places > 0 and not project.places.filter(visited=False).exists()
+    if project.is_completed != all_visited:
+        project.is_completed = all_visited
+        project.save(update_fields=["is_completed", "updated_at"])
 
 
 @api_view(["GET"])
@@ -38,6 +51,12 @@ def project_detail(request, project_id):
         serializer.save()
         return Response(serializer.data)
 
+    if project.places.filter(visited=True).exists():
+        return Response(
+            {"detail": "Project cannot be deleted because it has visited places."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
     project.delete()
     return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -51,12 +70,12 @@ def project_places_collection(request, project_id):
         serializer = ProjectPlaceSerializer(places, many=True)
         return Response(serializer.data)
 
-    serializer = AddPlaceSerializer(data=request.data, context={})
+    serializer = AddPlaceSerializer(data=request.data, context={"project": project})
     serializer.is_valid(raise_exception=True)
 
     external_id = serializer.validated_data["external_id"]
     notes = serializer.validated_data.get("notes", "")
-    artwork = serializer.context["artwork"]
+    artwork = serializer.validated_data["artwork"]
 
     place = ProjectPlace.objects.create(
         project=project,
@@ -66,10 +85,19 @@ def project_places_collection(request, project_id):
         visited=False,
     )
 
+    recalculate_project_completion(project)
     return Response(ProjectPlaceSerializer(place).data, status=status.HTTP_201_CREATED)
 
 
-@api_view(["GET"])
+@api_view(["GET", "PATCH"])
 def project_place_detail(request, project_id, place_id):
     place = get_object_or_404(ProjectPlace, pk=place_id, project_id=project_id)
+
+    if request.method == "GET":
+        return Response(ProjectPlaceSerializer(place).data)
+
+    serializer = ProjectPlaceUpdateSerializer(place, data=request.data, partial=True)
+    serializer.is_valid(raise_exception=True)
+    serializer.save()
+    recalculate_project_completion(place.project)
     return Response(ProjectPlaceSerializer(place).data)

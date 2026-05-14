@@ -39,11 +39,25 @@ class AddPlaceSerializer(serializers.Serializer):
     external_id = serializers.IntegerField(min_value=1)
     notes = serializers.CharField(required=False, allow_blank=True, default="")
 
-    def validate_external_id(self, value):
+    def validate(self, attrs):
+        project = self.context["project"]
+
+        if project.places.count() >= 10:
+            raise serializers.ValidationError("A project cannot contain more than 10 places.")
+
+        if project.places.filter(external_id=attrs["external_id"]).exists():
+            raise serializers.ValidationError("This place already exists in the project.")
+
         try:
-            artwork = get_artwork_by_external_id(value)
+            artwork = get_artwork_by_external_id(attrs["external_id"])
         except PlaceValidationError as exc:
             raise serializers.ValidationError(str(exc)) from exc
 
-        self.context["artwork"] = artwork
-        return value
+        attrs["artwork"] = artwork
+        return attrs
+
+
+class ProjectPlaceUpdateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProjectPlace
+        fields = ["notes", "visited"]
