@@ -2,6 +2,10 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# Keep Django migrations in git
+!**/migrations/
+!**/migrations/*.py
+
 .venv/
 env/
 
